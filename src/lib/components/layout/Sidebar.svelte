@@ -1735,6 +1735,8 @@
 													updatedAt={chat.updated_at}
 													lastReadAt={chat.last_read_at}
 													active={chat.active ?? false}
+													turnCount={chat.turn_count ?? null}
+													disabled={chat.disabled ?? false}
 													{shiftKey}
 													selected={selectedChatId === chat.id}
 													on:select={() => {
@@ -1800,6 +1802,8 @@
 											updatedAt={chat.updated_at}
 											lastReadAt={chat.last_read_at}
 											active={chat.active ?? false}
+											turnCount={chat.turn_count ?? null}
+											disabled={chat.disabled ?? false}
 											{shiftKey}
 											selected={selectedChatId === chat.id}
 											on:select={() => {

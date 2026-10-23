@@ -308,6 +308,10 @@ class ChatTitleIdResponse(BaseModel):
     snippet: str | None = None
     active: bool = False
     archived: bool = False
+    # Mirrors meta['turn_count'] / meta['disabled'] so the sidebar can render
+    # the turn indicator and disabled state without loading the chat blob.
+    turn_count: int | None = None
+    disabled: bool = False
 
 
 class SharedChatResponse(BaseModel):
@@ -404,6 +408,8 @@ class ChatTable:
                 await session.execute(text('BEGIN IMMEDIATE'))
             chat = await session.get(Chat, id, with_for_update=True)
             yield session, chat
+            if chat is not None:
+                self._sync_derived_meta(chat)
             await session.commit()
 
     @asynccontextmanager
@@ -441,6 +447,44 @@ class ChatTable:
     def _clean_null_bytes(self, obj):
         """Recursively remove null bytes from strings in dict/list structures."""
         return sanitize_data_for_db(obj)
+
+    @classmethod
+    def count_turns(cls, chat: dict | None) -> int:
+        """Count user and assistant messages on the active branch of a chat."""
+        chat = chat or {}
+        history = chat.get('history') if isinstance(chat.get('history'), dict) else {}
+        messages = history.get('messages') if isinstance(history.get('messages'), dict) else {}
+
+        if messages:
+            current_id = history.get('currentId') or chat.get('currentId') or chat.get('branchPointMessageId')
+            count = 0
+            seen: set[str] = set()
+            while current_id and current_id not in seen:
+                seen.add(current_id)
+                message = messages.get(current_id)
+                if not isinstance(message, dict):
+                    break
+                if message.get('role') in ('user', 'assistant'):
+                    count += 1
+                current_id = message.get('parentId')
+            return count
+
+        flat_messages = chat.get('messages')
+        if isinstance(flat_messages, list):
+            return sum(
+                1
+                for message in flat_messages
+                if isinstance(message, dict) and message.get('role') in ('user', 'assistant')
+            )
+        return 0
+
+    @classmethod
+    def _sync_derived_meta(cls, chat_item: Chat) -> None:
+        """Keep meta-derived fields in step with the chat blob on every write."""
+        meta = {**(chat_item.meta or {}), 'turn_count': cls.count_turns(chat_item.chat)}
+        if chat_item.meta != meta:
+            chat_item.meta = meta
+            flag_modified(chat_item, 'meta')
 
     def get_current_message_id(self, chat: dict | None) -> str | None:
         chat = chat or {}
@@ -626,7 +670,10 @@ class ChatTable:
                     ),
                     'chat': self._clean_null_bytes(form_data.chat),
                     'folder_id': form_data.folder_id,
-                    'meta': internal_meta or {},
+                    'meta': {
+                        **(internal_meta or {}),
+                        'turn_count': self.count_turns(form_data.chat),
+                    },
                     'timer_at': timer_at,
                     'variables': form_data.variables or {},
                     'current_message_id': self.get_current_message_id(form_data.chat),
@@ -717,7 +764,7 @@ class ChatTable:
                 'user_id': user_id,
                 'title': self._clean_null_bytes(form_data.chat['title'] if 'title' in form_data.chat else 'New Chat'),
                 'chat': self._clean_null_bytes(form_data.chat),
-                'meta': form_data.meta,
+                'meta': {**(form_data.meta or {}), 'turn_count': self.count_turns(form_data.chat)},
                 'variables': form_data.variables or {},
                 'pinned': form_data.pinned,
                 'archived': form_data.archived,
@@ -969,6 +1016,21 @@ class ChatTable:
                 return ChatModel.model_validate(chat_item)
         except Exception:
             return None
+
+    async def set_chat_disabled_by_id(
+        self, id: str, disabled: bool, db: AsyncSession | None = None
+    ) -> ChatModel | None:
+        """Toggle the per-chat disabled flag without rewriting the chat blob."""
+        async with get_async_db_context(db) as session:
+            chat_item = await session.get(Chat, id)
+            if chat_item is None:
+                return None
+
+            chat_item.meta = {**(chat_item.meta or {}), 'disabled': disabled}
+            flag_modified(chat_item, 'meta')
+            await session.commit()
+
+            return ChatModel.model_validate(chat_item)
 
     async def update_chat_tags_by_id(self, id: str, tags: list[str], user) -> None:
         """Replace a chat's tags. Runs after every completion with tag
@@ -1592,7 +1654,7 @@ class ChatTable:
         db: AsyncSession | None = None,
     ) -> list[ChatTitleIdResponse]:
         async with get_async_db_context(db) as session:
-            stmt = select(Chat.id, Chat.title, Chat.updated_at, Chat.created_at).filter_by(
+            stmt = select(Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.meta).filter_by(
                 user_id=user_id, archived=True
             )
             stmt = stmt.where(Chat.meta['internal'].as_boolean().is_not(True))
@@ -1632,6 +1694,8 @@ class ChatTable:
                         'title': chat[1],
                         'updated_at': chat[2],
                         'created_at': chat[3],
+                        'turn_count': (chat[4] or {}).get('turn_count'),
+                        'disabled': bool((chat[4] or {}).get('disabled')),
                     }
                 )
                 for chat in all_chats
@@ -1670,9 +1734,9 @@ class ChatTable:
         db: AsyncSession | None = None,
     ) -> list[ChatTitleIdResponse]:
         async with get_async_db_context(db) as session:
-            stmt = select(Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.last_read_at).filter_by(
-                user_id=user_id
-            )
+            stmt = select(
+                Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.last_read_at, Chat.meta
+            ).filter_by(user_id=user_id)
             stmt = stmt.where(Chat.meta['internal'].as_boolean().is_not(True))
             if not include_archived:
                 stmt = stmt.filter_by(archived=False)
@@ -1710,6 +1774,8 @@ class ChatTable:
                         'updated_at': chat[2],
                         'created_at': chat[3],
                         'last_read_at': chat[4],
+                        'turn_count': (chat[5] or {}).get('turn_count'),
+                        'disabled': bool((chat[5] or {}).get('disabled')),
                     }
                 )
                 for chat in all_chats
@@ -1728,9 +1794,9 @@ class ChatTable:
         db: AsyncSession | None = None,
     ) -> list[ChatTitleIdResponse]:
         async with get_async_db_context(db) as session:
-            stmt = select(Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.last_read_at).filter_by(
-                user_id=user_id
-            )
+            stmt = select(
+                Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.last_read_at, Chat.meta
+            ).filter_by(user_id=user_id)
             stmt = stmt.where(Chat.meta['internal'].as_boolean().is_not(True))
 
             if not include_folders:
@@ -1760,6 +1826,8 @@ class ChatTable:
                         'updated_at': chat[2],
                         'created_at': chat[3],
                         'last_read_at': chat[4],
+                        'turn_count': (chat[5] or {}).get('turn_count'),
+                        'disabled': bool((chat[5] or {}).get('disabled')),
                     }
                 )
                 for chat in all_chats
@@ -2120,9 +2188,9 @@ class ChatTable:
         self, user_id: str, db: AsyncSession | None = None
     ) -> list[ChatTitleIdResponse]:
         async with get_async_db_context(db) as session:
-            stmt = select(Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.last_read_at).filter_by(
-                user_id=user_id, pinned=True, archived=False
-            )
+            stmt = select(
+                Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.last_read_at, Chat.meta
+            ).filter_by(user_id=user_id, pinned=True, archived=False)
             stmt = stmt.where(Chat.meta['internal'].as_boolean().is_not(True))
             result = await session.execute(stmt.order_by(Chat.updated_at.desc()))
             all_chats = result.all()
@@ -2134,6 +2202,8 @@ class ChatTable:
                         'updated_at': chat[2],
                         'created_at': chat[3],
                         'last_read_at': chat[4],
+                        'turn_count': (chat[5] or {}).get('turn_count'),
+                        'disabled': bool((chat[5] or {}).get('disabled')),
                     }
                 )
                 for chat in all_chats
@@ -2350,7 +2420,7 @@ class ChatTable:
     ) -> list[ChatTitleIdResponse]:
         async with get_async_db_context(db) as session:
             stmt = (
-                select(Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.last_read_at)
+                select(Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.last_read_at, Chat.meta)
                 .filter_by(folder_id=folder_id, user_id=user_id)
                 .filter(or_(Chat.pinned == False, Chat.pinned == None))
                 .filter_by(archived=False)
@@ -2373,6 +2443,8 @@ class ChatTable:
                         'updated_at': chat[2],
                         'created_at': chat[3],
                         'last_read_at': chat[4],
+                        'turn_count': (chat[5] or {}).get('turn_count'),
+                        'disabled': bool((chat[5] or {}).get('disabled')),
                     }
                 )
                 for chat in all_chats
@@ -2391,7 +2463,15 @@ class ChatTable:
         """Get chats in a folder across ALL users. Returns dicts with user_id."""
         async with get_async_db_context(db) as session:
             stmt = (
-                select(Chat.id, Chat.title, Chat.user_id, Chat.updated_at, Chat.created_at, Chat.last_read_at)
+                select(
+                    Chat.id,
+                    Chat.title,
+                    Chat.user_id,
+                    Chat.updated_at,
+                    Chat.created_at,
+                    Chat.last_read_at,
+                    Chat.meta,
+                )
                 .filter_by(folder_id=folder_id)
                 .filter(or_(Chat.pinned == False, Chat.pinned == None))
                 .filter_by(archived=False)
@@ -2414,6 +2494,8 @@ class ChatTable:
                     'updated_at': chat[3],
                     'created_at': chat[4],
                     'last_read_at': chat[5],
+                    'turn_count': (chat[6] or {}).get('turn_count'),
+                    'disabled': bool((chat[6] or {}).get('disabled')),
                 }
                 for chat in all_chats
             ]
@@ -2562,9 +2644,9 @@ class ChatTable:
         db: AsyncSession | None = None,
     ) -> list[ChatTitleIdResponse]:
         async with get_async_db_context(db) as session:
-            stmt = select(Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.last_read_at).filter_by(
-                user_id=user_id
-            )
+            stmt = select(
+                Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.last_read_at, Chat.meta
+            ).filter_by(user_id=user_id)
             stmt = stmt.where(Chat.meta['internal'].as_boolean().is_not(True))
             tag_id = tag_name.replace(' ', '_').lower()
 
@@ -2599,6 +2681,8 @@ class ChatTable:
                         'updated_at': chat[2],
                         'created_at': chat[3],
                         'last_read_at': chat[4],
+                        'turn_count': (chat[5] or {}).get('turn_count'),
+                        'disabled': bool((chat[5] or {}).get('disabled')),
                     }
                 )
                 for chat in all_chats

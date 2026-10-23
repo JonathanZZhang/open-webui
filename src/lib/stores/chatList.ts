@@ -3,6 +3,8 @@ import { getChatList, getPinnedChatList } from '$lib/apis/chats';
 
 type ChatListItem = {
 	id: string;
+	turn_count?: number | null;
+	disabled?: boolean;
 	[key: string]: unknown;
 };
 

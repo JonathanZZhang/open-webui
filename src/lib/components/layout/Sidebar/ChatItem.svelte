@@ -33,6 +33,7 @@
 		getChatListByTagName,
 		markChatUnreadById,
 		updateChatById,
+		updateChatDisabledById,
 		updateChatFolderIdById
 	} from '$lib/apis/chats';
 	import {
@@ -96,6 +97,8 @@
 	export let selected = false;
 	export let shiftKey = false;
 	export let readonly = false;
+	export let disabled = false;
+	export let turnCount: number | null = null;
 
 	export let ownerName: string | null = null;
 	export let ownerUserId: string | null = null;
@@ -311,6 +314,27 @@
 		}
 
 		deleting = false;
+	};
+
+	const disabledHandler = async () => {
+		const nextDisabled = !disabled;
+		const res = await updateChatDisabledById(localStorage.token, id, nextDisabled).catch(
+			(error) => {
+				toast.error(`${error}`);
+				return null;
+			}
+		);
+
+		if (res) {
+			// Close the chat that was just disabled so it reopens read-only instead
+			// of staying editable in the pane on the right.
+			if (nextDisabled && id === $chatId) {
+				await goto('/');
+				await chatId.set('');
+			}
+
+			dispatch('change');
+		}
 	};
 
 	let archiving = false;
@@ -571,9 +595,13 @@
 		{/if}
 		<div
 			dir="auto"
-			class="text-left self-center overflow-hidden w-full h-5 truncate {unread
-				? 'font-normal text-gray-800 dark:text-gray-200'
-				: ''} {($mobile || showInlineActions) && !readonly && !selecting ? 'pr-12' : ''}"
+			class="text-left self-center overflow-hidden w-full h-5 truncate {disabled
+				? 'font-normal text-gray-400 dark:text-gray-500'
+				: unread
+					? 'font-normal text-gray-800 dark:text-gray-200'
+					: ''} {($mobile || showInlineActions) && turnCount === null && !readonly && !selecting
+				? 'pr-12'
+				: ''}"
 		>
 			{title}
 		</div>
@@ -595,6 +623,16 @@
 		>
 			{formatTimeAgo((updatedAt ?? createdAt) as number)}
 		</div>
+	{/if}
+
+	<!-- Turn indicator; the right padding reserves room for the inline menu on hover -->
+	{#if turnCount !== null}
+		<Tooltip
+			className="shrink-0 self-center pr-8 pl-2 text-[0.625rem] text-gray-400 dark:text-gray-500"
+			content={$i18n.t('User and assistant turns in this branch')}
+		>
+			{$i18n.t('{{count}} turns', { count: turnCount })}
+		</Tooltip>
 	{/if}
 {/snippet}
 
@@ -839,6 +877,8 @@
 						deleteHandler={() => {
 							showDeleteConfirm = true;
 						}}
+						{disabledHandler}
+						{disabled}
 						{markUnreadHandler}
 						onOpen={() => {
 							menuOpen = true;

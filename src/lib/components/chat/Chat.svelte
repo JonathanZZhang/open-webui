@@ -413,6 +413,8 @@
 
 	// Non-owners may reply when the sharing mode allows it, but cannot save chat edits.
 	$: isShared = chat != null && chat.user_id !== $user?.id;
+	// Disabled chats stay readable, but no new messages can be sent and messages cannot be edited.
+	$: isDisabled = chat?.meta?.disabled ?? false;
 	$: if (isShared && $showCallOverlay) showCallOverlay.set(false);
 	$: canClone = isShared && ($user?.role === 'admin' || ($user?.permissions?.chat?.import ?? true));
 	let cloning = false;
@@ -5262,7 +5264,7 @@
 										bind:this={messagesRef}
 										chatId={$chatId}
 										user={chatOwner ?? (chat ? { id: chat.user_id } : $user)}
-										readOnly={isShared}
+										readOnly={isShared || isDisabled}
 										shareMode={chat?.chat?.share_mode ?? null}
 										bind:history
 										bind:autoScroll
@@ -5292,7 +5294,15 @@
 								</div>
 							</div>
 
-							{#if isShared && chat?.chat?.share_mode !== 'continue'}
+							{#if isDisabled}
+								<div class="pb-2">
+									<div
+										class="mx-1 flex items-center justify-center rounded-2xl bg-gray-50 px-3 py-2.5 text-center text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400"
+									>
+										{$i18n.t('This chat is disabled. Enable it from the sidebar to continue.')}
+									</div>
+								</div>
+							{:else if isShared && chat?.chat?.share_mode !== 'continue'}
 								{#if canClone}
 									<div
 										class="pointer-events-none absolute inset-x-0 bottom-0 z-10 flex justify-center gap-2 bg-linear-to-t from-white dark:from-gray-900 to-transparent pb-5 pt-10"
@@ -5408,68 +5418,76 @@
 									</div>
 								{/if}
 								<div id={embedded ? messageInputDropzoneId : undefined} class="pb-2 z-10">
-									<MessageInput
-										{terminalContext}
-										{typingUsers}
-										on:typing={(event) => emitTyping(event.detail)}
-										callActive={!!(bridge?.connected || bridge?.connecting)}
-										callEnabled={!isShared}
-										bind:this={messageInput}
-										{history}
-										{taskIds}
-										bind:selectedModels
-										bind:files
-										bind:prompt
-										bind:autoScroll
-										bind:selectedToolIds
-										bind:selectedSkillIds
-										bind:selectedFilterIds
-										bind:imageGenerationEnabled
-										bind:codeInterpreterEnabled
-										{pendingOAuthTools}
-										{oauthRedirectHandler}
-										bind:webSearchEnabled
-										bind:atSelectedModel
-										bind:showCommands
-										bind:dragged
-										dropzoneId={messageInputDropzoneId}
-										chatId={$chatId}
-										{contextUsage}
-										{contextCompactionEnabled}
-										{embedded}
-										compactHandler={handleManualCompact}
-										statusHandler={handleStatusCommand}
-										forkHandler={handleForkChat}
-										{toolApprovalMode}
-										onToolApprovalModeChange={handleToolApprovalModeChange}
-										{generating}
-										{stopResponse}
-										{createMessagePair}
-										{onUpload}
-										{onUpdate}
-										messageQueue={$chatRequestQueues[$chatId] ?? []}
-										{chatTasks}
-										askUser={savedAskUserPrompt ?? socketAskUserPrompt}
-										onQueueSendNow={sendQueuedMessageNow}
-										onQueueEdit={editQueuedMessage}
-										onQueueDelete={deleteQueuedMessage}
-										onChange={(data: any) => {
-											if (!$temporaryChatEnabled) {
-												saveDraft(data, getDraftChatId());
-											}
-										}}
-										onWebSearchToggle={handleWebSearchToggle}
-										on:chatVariables={() => {
-											showChatVariablesModal = true;
-										}}
-										on:submit={async (e) => {
-											clearDraft(getDraftChatId());
-											if (e.detail || files.length > 0) {
-												await tick();
-												submitHandler(withSelectedText(e.detail));
-											}
-										}}
-									/>
+									{#if isDisabled}
+										<div
+											class="mx-1 flex items-center justify-center rounded-2xl bg-gray-50 px-3 py-2.5 text-center text-xs text-gray-500 dark:bg-gray-900 dark:text-gray-400"
+										>
+											{$i18n.t('This chat is disabled. Enable it from the sidebar to continue.')}
+										</div>
+									{:else}
+										<MessageInput
+											{terminalContext}
+											{typingUsers}
+											on:typing={(event) => emitTyping(event.detail)}
+											callActive={!!(bridge?.connected || bridge?.connecting)}
+											callEnabled={!isShared}
+											bind:this={messageInput}
+											{history}
+											{taskIds}
+											bind:selectedModels
+											bind:files
+											bind:prompt
+											bind:autoScroll
+											bind:selectedToolIds
+											bind:selectedSkillIds
+											bind:selectedFilterIds
+											bind:imageGenerationEnabled
+											bind:codeInterpreterEnabled
+											{pendingOAuthTools}
+											{oauthRedirectHandler}
+											bind:webSearchEnabled
+											bind:atSelectedModel
+											bind:showCommands
+											bind:dragged
+											dropzoneId={messageInputDropzoneId}
+											chatId={$chatId}
+											{contextUsage}
+											{contextCompactionEnabled}
+											{embedded}
+											compactHandler={handleManualCompact}
+											statusHandler={handleStatusCommand}
+											forkHandler={handleForkChat}
+											{toolApprovalMode}
+											onToolApprovalModeChange={handleToolApprovalModeChange}
+											{generating}
+											{stopResponse}
+											{createMessagePair}
+											{onUpload}
+											{onUpdate}
+											messageQueue={$chatRequestQueues[$chatId] ?? []}
+											{chatTasks}
+											askUser={savedAskUserPrompt ?? socketAskUserPrompt}
+											onQueueSendNow={sendQueuedMessageNow}
+											onQueueEdit={editQueuedMessage}
+											onQueueDelete={deleteQueuedMessage}
+											onChange={(data: any) => {
+												if (!$temporaryChatEnabled) {
+													saveDraft(data, getDraftChatId());
+												}
+											}}
+											onWebSearchToggle={handleWebSearchToggle}
+											on:chatVariables={() => {
+												showChatVariablesModal = true;
+											}}
+											on:submit={async (e) => {
+												clearDraft(getDraftChatId());
+												if (e.detail || files.length > 0) {
+													await tick();
+													submitHandler(withSelectedText(e.detail));
+												}
+											}}
+										/>
+									{/if}
 								</div>
 							</div>
 						{:else}

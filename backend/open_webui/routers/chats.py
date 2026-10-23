@@ -216,6 +216,10 @@ class CompactChatForm(BaseModel):
     model: str | None = None
 
 
+class ChatDisabledForm(BaseModel):
+    disabled: bool = True
+
+
 def chat_search_content_text(text: str) -> str:
     return chat_search_content_query(text)
 
@@ -953,6 +957,8 @@ async def search_user_chats(
                 last_read_at=chat.last_read_at,
                 snippet=chat_search_snippet(chat.chat, search_text),
                 archived=chat.archived,
+                turn_count=(chat.meta or {}).get('turn_count'),
+                disabled=bool((chat.meta or {}).get('disabled')),
             )
         )
 
@@ -2090,6 +2096,24 @@ async def archive_chat_by_id(
         return ChatResponse.model_validate(chat, from_attributes=True)
     else:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=ERROR_MESSAGES.DEFAULT())
+
+
+# --- Disable Chat ---
+
+
+@router.post('/{id}/disabled', response_model=ChatResponse | None)
+async def update_chat_disabled_by_id(
+    id: str,
+    form_data: ChatDisabledForm,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    chat = await Chats.get_chat_by_id_and_user_id(id, user.id, db=db)
+    if not chat:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=ERROR_MESSAGES.DEFAULT())
+
+    chat = await Chats.set_chat_disabled_by_id(id, form_data.disabled, db=db)
+    return ChatResponse.model_validate(chat, from_attributes=True)
 
 
 # --- Share Chat ---

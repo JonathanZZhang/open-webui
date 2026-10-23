@@ -27,6 +27,7 @@
 	import PinSlashIcon from './icons/PinSlash.svelte';
 	import ShareIcon from './icons/Share.svelte';
 	import TrashIcon from './icons/Trash.svelte';
+	import LockIcon from './icons/Lock.svelte';
 	import ChatCheckIcon from '$lib/components/icons/ChatCheck.svelte';
 
 	const i18n = getContext('i18n');
@@ -38,6 +39,8 @@
 	export let archiveChatHandler: Function;
 	export let renameHandler: Function;
 	export let deleteHandler: Function;
+	export let disabledHandler: Function = () => {};
+	export let disabled = false;
 	export let onOpen: () => void = () => {};
 	export let onClose: Function;
 	export let markUnreadHandler: Function = () => {};
@@ -511,6 +514,19 @@
 					<div class="flex items-center">{$i18n.t('Delete')}</div>
 				</button>
 			{/if}
+
+			<hr class="border-gray-50/30 dark:border-gray-800/30 mx-1 my-0.5" />
+
+			<button
+				draggable="false"
+				class="flex h-[1.6875rem] gap-2 items-center rounded-xl px-2 text-[0.8125rem] cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-900 w-full"
+				on:click={() => {
+					disabledHandler();
+				}}
+			>
+				<LockIcon className="size-3.5" strokeWidth="1.5" />
+				<div class="flex items-center">{disabled ? $i18n.t('Enable') : $i18n.t('Disable')}</div>
+			</button>
 		</DropdownMenu>
 	</div>
 </Dropdown>

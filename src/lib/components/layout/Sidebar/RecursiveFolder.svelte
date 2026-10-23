@@ -1005,6 +1005,8 @@
 							updatedAt={chat.updated_at}
 							lastReadAt={chat.last_read_at}
 							active={chat.active ?? false}
+							turnCount={chat.turn_count ?? chat.meta?.turn_count ?? null}
+							disabled={chat.disabled ?? chat.meta?.disabled ?? false}
 							ownerName={chat.owner_name ?? null}
 							participants={chat.participants ?? []}
 							ownerUserId={folders[folderId]?.showOwnerInfo ||
